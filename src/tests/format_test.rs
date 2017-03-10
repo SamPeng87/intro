@@ -1,7 +1,6 @@
 extern crate env_logger;
 
-use format;
-
+#[allow(dead_code)]
 struct FormatTests {
     layouts: Vec<&'static str>
 }

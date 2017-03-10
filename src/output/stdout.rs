@@ -1,4 +1,3 @@
-use mio::channel::Receiver;
 use super::ReceiverData;
 use super::Output;
 use std::io;
@@ -9,6 +8,7 @@ pub enum Direction {
     STDERR,
 }
 
+#[derive(Clone)]
 pub struct Std;
 
 pub struct StdData {
@@ -18,7 +18,6 @@ pub struct StdData {
 
 
 impl ReceiverData for StdData {
-    type Type = Direction;
     fn get_direction(&self) -> &Direction {
         &self.direction
     }
@@ -29,15 +28,14 @@ impl ReceiverData for StdData {
 
 
 impl Output<StdData> for Std{
-    fn push(&self, out: StdData){
+    fn push(&self, out: StdData)
+    {
         match out.get_direction(){
             &Direction::STDOUT =>{
-                println!("push stdout");
-                writeln!(&mut io::stdout(), "{}", out.get_string());
+                let _ = writeln!(&mut io::stdout(), "{}", out.get_string());
             },
             &Direction::STDERR=>{
-                println!("push stderr");
-                writeln!(&mut io::stderr(), "{}", out.get_string());
+                let _ = writeln!(&mut io::stderr(), "{}", out.get_string());
             }
 
         }

@@ -6,10 +6,9 @@ extern crate mio;
 
 
 use log::{LogLevel, LogLevelFilter, SetLoggerError, LogMetadata, LogRecord};
-use std::io;
-use std::io::Write;
 use std::collections::HashMap;
 use std::mem;
+
 
 mod format;
 mod output;
@@ -18,18 +17,24 @@ mod event;
 use output::stdout::Direction;
 use output::stdout::Std;
 use output::stdout::StdData;
-use output::ReceiverData;
 
-const DEFAULT_FORMAT_STRING: &'static str = "%{level}:%{modulePath} %{message}";
+const DEFAULT_FORMAT_STRING: &'static str = "%{level}:\t%{modulePath}\t%{message}";
 
+struct Channel{
+    formater: format::Formater,
+    sender: output::ReceiverData,
+    test: output::Output<output::ReceiverData>,
+}
+
+
+#[allow(dead_code)]
 struct Logger {
     root_formater: format::Formater,
     target_formater: HashMap<String, format::Formater>,
     module_formater: HashMap<String, format::Formater>,
     global_part: HashMap<String, String>,
-    stdout_output: Option<event::EventPool<StdData>>,
+    stdout_output: Option<event::EventPool<Std, StdData>>,
 }
-
 
 
 impl log::Log for Logger {
@@ -59,20 +64,23 @@ impl log::Log for Logger {
 
 impl Logger {
     fn write(&self, formater: &format::Formater, record: &LogRecord) {
-        match self.stdout_output {
-            Some(ref e) => {
-                e.send(StdData {
-                    direction: Direction::STDOUT,
-                    string: formater.parse(|part| -> String{
-                        parse(part, record)
-                    })
-                });
+        if record.location().module_path() == "intro" {
+            match self.stdout_output {
+                Some(ref e) => {
+                    e.send(StdData {
+                        direction: Direction::STDOUT,
+                        string: formater.parse(|part| -> String{
+                            parse(part, record)
+                        })
+                    });
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 }
 
+#[allow(dead_code)]
 struct LoggerBuilder {
     target_formater: HashMap<String, format::Formater>,
     module_formater: HashMap<String, format::Formater>,
@@ -80,6 +88,7 @@ struct LoggerBuilder {
     root_formater: format::Formater,
 }
 
+#[allow(dead_code)]
 impl LoggerBuilder {
     fn new() -> LoggerBuilder {
         LoggerBuilder {
@@ -137,7 +146,7 @@ fn parse(part: &format::Part, args: &LogRecord) -> String {
         "string" => {
             match part.layout() {
                 &Some(ref layout) =>
-                    return format!("{}", layout),
+                    return layout.clone(),
                 _ =>
                     return "".to_string(),
             };
@@ -160,7 +169,7 @@ fn parse(part: &format::Part, args: &LogRecord) -> String {
         }
 
         _ => {
-            return "".to_string();
+            return format!("{}", "");
         }
     }
 }
@@ -172,9 +181,20 @@ mod tests;
 #[test]
 fn format_parse() {
     use std::thread;
-    let e = init().is_err();
-    info!("{}", e);
-    debug!(target: "test", "{}", e);
+    let _ = init();
+    let mut children = vec![];
 
-    thread::sleep_ms(1000)
+    for i in 0..5 {
+        children.push(thread::spawn(move || {
+            for j in 0..5 {
+                info!("{} {}", i, j);
+            }
+        }));
+    }
+    for child in children {
+        child.join().unwrap()
+    }
+
+
+
 }
