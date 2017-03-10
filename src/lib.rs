@@ -14,16 +14,36 @@ mod format;
 mod output;
 mod event;
 
-use output::stdout::Direction;
-use output::stdout::Std;
-use output::stdout::StdData;
+use output::stdout::*;
+use output::*;
+use std::sync::{Arc, Mutex};
+use mio::channel;
 
 const DEFAULT_FORMAT_STRING: &'static str = "%{level}:\t%{modulePath}\t%{message}";
 
-struct Channel{
-    formater: format::Formater,
-    sender: output::ReceiverData,
-    test: output::Output<output::ReceiverData>,
+
+trait Channeled: Send + Sync {
+    fn send(&self, strings: String);
+    fn sync_send(&self, strings: String);
+}
+
+struct StdChannel {
+    tx: Arc<Mutex<channel::Sender<String>>>,
+    out: Arc<Std>
+}
+
+impl Channeled for StdChannel {
+    #[inline]
+    fn send(&self, strings: String) {
+        let tx_arc = self.tx.clone();
+        let tx = tx_arc.lock().unwrap().clone();
+        tx.send(strings).unwrap();
+    }
+
+    #[inline]
+    fn sync_send(&self, strings: String) {
+        self.out.clone().push(strings);
+    }
 }
 
 
@@ -33,7 +53,7 @@ struct Logger {
     target_formater: HashMap<String, format::Formater>,
     module_formater: HashMap<String, format::Formater>,
     global_part: HashMap<String, String>,
-    stdout_output: Option<event::EventPool<Std, StdData>>,
+    outputs: Vec<Box<Channeled>>
 }
 
 
@@ -63,19 +83,12 @@ impl log::Log for Logger {
 }
 
 impl Logger {
+    #[inline]
     fn write(&self, formater: &format::Formater, record: &LogRecord) {
         if record.location().module_path() == "intro" {
-            match self.stdout_output {
-                Some(ref e) => {
-                    e.send(StdData {
-                        direction: Direction::STDOUT,
-                        string: formater.parse(|part| -> String{
-                            parse(part, record)
-                        })
-                    });
-                }
-                _ => {}
-            }
+            self.outputs[0].send(formater.parse(|part| -> String{
+                parse(part, record)
+            }));
         }
     }
 }
@@ -86,32 +99,44 @@ struct LoggerBuilder {
     module_formater: HashMap<String, format::Formater>,
     global_part: HashMap<String, String>,
     root_formater: format::Formater,
+    outputs: Vec<Box<Channeled>>
 }
 
 #[allow(dead_code)]
 impl LoggerBuilder {
+    #[inline]
     fn new() -> LoggerBuilder {
+        let o = Arc::new(Std::new(Direction::STDOUT));
         LoggerBuilder {
             target_formater: HashMap::new(),
             module_formater: HashMap::new(),
             global_part: HashMap::new(),
             root_formater: format::Formater::new(DEFAULT_FORMAT_STRING),
+            outputs: vec![
+                Box::new(StdChannel {
+                    tx: Arc::new(Mutex::new(event::EventPool::new(o.clone()))),
+                    out: o.clone()
+                })
+            ],
         }
     }
+    #[inline]
     fn add_target_formater(&mut self, name: &str, format: &str) -> &mut Self {
         self.target_formater.insert(name.to_string(), format::Formater::new(format));
         self
     }
-
+    #[inline]
     fn add_module_formater(&mut self, name: &str, format: &str) -> &mut Self {
         self.target_formater.insert(name.to_string(), format::Formater::new(format));
         self
     }
-
+    #[inline]
     fn root_formater(&mut self, format: &str) -> &mut Self {
         self.root_formater = format::Formater::new(format);
         self
     }
+
+    #[inline]
     fn global_part(&mut self, part: Box<HashMap<String, String>>) -> &mut Self {
         self.global_part = *part;
         self
@@ -123,7 +148,7 @@ impl LoggerBuilder {
             module_formater: mem::replace(&mut self.module_formater, HashMap::new()),
             global_part: mem::replace(&mut self.global_part, HashMap::new()),
             root_formater: mem::replace(&mut self.root_formater, format::Formater::new("")),
-            stdout_output: Some(event::EventPool::new(Std))
+            outputs: mem::replace(&mut self.outputs, vec!()),
         }
     }
 }
@@ -140,7 +165,7 @@ pub fn init() -> Result<(), SetLoggerError> {
     })
 }
 
-
+#[inline]
 fn parse(part: &format::Part, args: &LogRecord) -> String {
     match part.name() {
         "string" => {
@@ -181,12 +206,14 @@ mod tests;
 #[test]
 fn format_parse() {
     use std::thread;
+    use std::time::{SystemTime};
     let _ = init();
     let mut children = vec![];
 
+    let now = SystemTime::now();
     for i in 0..5 {
         children.push(thread::spawn(move || {
-            for j in 0..5 {
+            for j in 0..1000 {
                 info!("{} {}", i, j);
             }
         }));
@@ -194,7 +221,14 @@ fn format_parse() {
     for child in children {
         child.join().unwrap()
     }
-
-
-
+    match now.elapsed() {
+        Ok(elapsed) => {
+            // it prints '2'
+            println!("time is {}", elapsed.subsec_nanos());
+        }
+        Err(e) => {
+            // an error occured!
+            println!("Error: {:?}", e);
+        }
+    }
 }
