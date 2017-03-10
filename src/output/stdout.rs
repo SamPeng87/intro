@@ -2,6 +2,9 @@ use super::ReceiverData;
 use super::Output;
 use std::io;
 use std::io::Write;
+use std::sync::{Arc, Mutex};
+use mio::channel;
+use Channeled;
 
 #[derive(Clone)]
 pub enum Direction {
@@ -12,6 +15,34 @@ pub enum Direction {
 #[derive(Clone)]
 pub struct Std {
     direction: Direction
+}
+
+pub struct StdChannel {
+    tx: Arc<Mutex<channel::Sender<String>>>,
+    out: Arc<Std>
+}
+
+impl StdChannel {
+    pub fn new(tx: channel::Sender<String>, out: Arc<Std>) -> Self {
+        StdChannel {
+            tx: Arc::new(Mutex::new(tx)),
+            out: out.clone()
+        }
+    }
+}
+
+impl Channeled for StdChannel {
+    #[inline]
+    fn send(&self, strings: String) {
+        let tx_arc = self.tx.clone();
+        let tx = tx_arc.lock().unwrap().clone();
+        tx.send(strings).unwrap();
+    }
+
+    #[inline]
+    fn sync_send(&self, strings: String) {
+        self.out.clone().push(strings);
+    }
 }
 
 impl Std {

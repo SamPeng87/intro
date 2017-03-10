@@ -33,7 +33,6 @@ impl EventPool
                             loop {
                                 match rx.try_recv() {
                                     Ok(v) => {
-                                        println!("receive");
                                         o.clone().push(v);
                                     },
                                     Err(_) => {
@@ -60,12 +59,5 @@ fn test_send_event() {
     use output::stdout::Direction;
     use output::stdout::Std;
     use std::time::Duration;
-
-//    let a = Std::new(
-//        Direction::STDOUT
-//    );
-//    let b = EventPool::new(a);
-//
-//    thread::sleep(Duration::from_millis(1000))
 }
 

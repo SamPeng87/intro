@@ -27,25 +27,6 @@ trait Channeled: Send + Sync {
     fn sync_send(&self, strings: String);
 }
 
-struct StdChannel {
-    tx: Arc<Mutex<channel::Sender<String>>>,
-    out: Arc<Std>
-}
-
-impl Channeled for StdChannel {
-    #[inline]
-    fn send(&self, strings: String) {
-        let tx_arc = self.tx.clone();
-        let tx = tx_arc.lock().unwrap().clone();
-        tx.send(strings).unwrap();
-    }
-
-    #[inline]
-    fn sync_send(&self, strings: String) {
-        self.out.clone().push(strings);
-    }
-}
-
 
 #[allow(dead_code)]
 struct Logger {
@@ -113,10 +94,7 @@ impl LoggerBuilder {
             global_part: HashMap::new(),
             root_formater: format::Formater::new(DEFAULT_FORMAT_STRING),
             outputs: vec![
-                Box::new(StdChannel {
-                    tx: Arc::new(Mutex::new(event::EventPool::new(o.clone()))),
-                    out: o.clone()
-                })
+                Box::new(StdChannel::new(event::EventPool::new(o.clone()),o.clone())),
             ],
         }
     }
