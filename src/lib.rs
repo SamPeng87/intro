@@ -27,6 +27,17 @@ trait Channeled: Send + Sync {
     fn sync_send(&self, strings: String);
 }
 
+struct LogDirective {
+    name: Option<String>,
+    level: LogLevelFilter,
+}
+
+struct LogExecute{
+    formater: format::Formater,
+    outputs: Vec<&Box<Channeled>>,
+    directive: Vec<LogDirective>
+}
+
 
 #[allow(dead_code)]
 struct Logger {
@@ -36,6 +47,7 @@ struct Logger {
     global_part: HashMap<String, String>,
     outputs: Vec<Box<Channeled>>
 }
+
 
 
 impl log::Log for Logger {
