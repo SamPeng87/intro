@@ -3,6 +3,13 @@ root:
   output:
     - where: stdout
 
+mio:
+  filter: off
+http:
+  format: "%{message}"
+  where:
+    info: output,int
+
 ##$remote_addr, $http_x_forwarded_for 记录客户端IP地址
 ##$remote_user 记录客户端用户名称
 ##$request 记录请求的URL和HTTP协议
