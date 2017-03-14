@@ -2,37 +2,34 @@ use regex::Regex;
 use std::str;
 use std::string::String;
 use std::marker::Sized;
+use super::Formatter;
+use super::Parted;
+use super::LogEntry;
+
 
 pub struct Part {
     name: String,
     layout: Option<String>,
 }
 
-impl Part {
-    pub fn name(&self) -> &str {
+impl Parted for Part {
+    fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn layout(&self) -> &Option<String> {
+    fn layout(&self) -> &Option<String> {
         &(self.layout)
     }
 }
 
-pub struct Formater {
+pub struct StringFormatter {
     parts: Vec<Part>,
 }
 
-pub trait FormaterParseCase: Sized {
-    type ParamType: ? Sized;
-
-    fn parse(&self, part: &Part, args: &Self::ParamType) -> String;
-}
-
-
-impl Formater {
-    pub fn new(layout: &str) -> Formater {
-        let parts = Formater::parse_parts(layout);
-        Formater {
+impl StringFormatter {
+    pub fn new(layout: &str) -> StringFormatter {
+        let parts = StringFormatter::parse_parts(layout);
+        StringFormatter {
             parts: parts,
         }
     }
@@ -86,15 +83,50 @@ impl Formater {
     }
 }
 
-impl Formater {
-    pub fn parse<F>(&self, parse_factory: F) -> String
-        where F: Fn(&Part) -> String
+
+impl Formatter for StringFormatter {
+
+    fn parse(&self, record: &LogEntry) -> String
     {
-        let mut res = String::with_capacity(1000);
+        let mut res = String::with_capacity(100);
         for part in &self.parts {
-            res += &parse_factory(part)
+            res += &parse(part, record);
         }
         res
     }
+
 }
 
+#[inline]
+fn parse(part: &Part, args: &LogEntry) -> String {
+    match part.name() {
+        "string" => {
+            match part.layout() {
+                &Some(ref layout) =>
+                    return layout.clone(),
+                _ =>
+                    return "".to_string(),
+            };
+        }
+        "line" => {
+            return format!("{}", args.location().line());
+        }
+        "level" => {
+            return format!("{}", args.level());
+        }
+
+        "file" => {
+            return format!("{}", args.location().file());
+        }
+        "modulePath" => {
+            return format!("{}", args.location().module_path());
+        }
+        "message" => {
+            return format!("{}", args.args());
+        }
+
+        _ => {
+            return format!("{}", "");
+        }
+    }
+}

@@ -5,6 +5,7 @@ use std::thread;
 use output::ReceiverData;
 use output::Output;
 use std::sync::{Arc, Mutex};
+use LogEntry;
 
 
 pub struct EventPool;
@@ -12,12 +13,12 @@ pub struct EventPool;
 impl EventPool
 {
     #[inline]
-    pub fn new<T>(o: Arc<T>) -> channel::Sender<String>
+    pub fn new<T>(o: Arc<T>) -> channel::Sender<Arc<LogEntry>>
         where T: Output
     {
         let mut events = Events::with_capacity(10);
         let poll = Poll::new().unwrap();
-        let (tx, rx): (channel::Sender<String>, channel::Receiver<String>) = channel::channel();
+        let (tx, rx): (channel::Sender<Arc<LogEntry>>, channel::Receiver<Arc<LogEntry>>) = channel::channel();
 
 
         assert_eq!(0, events.len());

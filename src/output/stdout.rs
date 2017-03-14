@@ -1,10 +1,14 @@
-use super::ReceiverData;
-use super::Output;
+use ReceiverData;
+use Output;
+use LogEntry;
 use std::io;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use mio::channel;
 use Channeled;
+use std::thread;
+use format;
+use Formatter;
 
 #[derive(Clone)]
 pub enum Direction {
@@ -12,56 +16,60 @@ pub enum Direction {
     STDERR,
 }
 
-#[derive(Clone)]
 pub struct Std {
-    direction: Direction
+    direction: Direction,
+    formatter: format::StringFormatter
 }
 
 pub struct StdChannel {
-    tx: Arc<Mutex<channel::Sender<String>>>,
-    out: Arc<Std>
+    tx: Arc<Mutex<channel::Sender<Arc<LogEntry>>>>,
+    out: Arc<Std>,
 }
 
 impl StdChannel {
-    pub fn new(tx: channel::Sender<String>, out: Arc<Std>) -> Self {
+    pub fn new(tx: channel::Sender<Arc<LogEntry>>, out: Arc<Std>) -> Self {
         StdChannel {
             tx: Arc::new(Mutex::new(tx)),
-            out: out.clone()
+            out: out.clone(),
         }
     }
 }
 
 impl Channeled for StdChannel {
     #[inline]
-    fn send(&self, strings: String) {
+    fn send(&self, strings: Arc<LogEntry>) {
         let tx_arc = self.tx.clone();
         let tx = tx_arc.lock().unwrap().clone();
         tx.send(strings).unwrap();
     }
 
     #[inline]
-    fn sync_send(&self, strings: String) {
+    fn sync_send(&self, strings: Arc<LogEntry>) {
         self.out.clone().push(strings);
     }
 }
 
 impl Std {
-    pub fn new(dir: Direction) -> Self {
+    pub fn new(dir: Direction, formatter: format::StringFormatter) -> Self {
         Std {
-            direction: dir
+            direction: dir,
+            formatter: formatter
         }
     }
 }
 
 impl Output for Std {
-    fn push(&self, out: String)
+    fn push(&self, out: Arc<LogEntry>)
     {
+        let out_string = self.formatter.parse(&out.clone());
+
+
         match self.direction {
             Direction::STDOUT => {
-                let _ = writeln!(&mut io::stdout(), "{}", out);
+                let _ = writeln!(&mut io::stdout(), "{}", out_string);
             },
             Direction::STDERR => {
-                let _ = writeln!(&mut io::stderr(), "{}", out);
+                let _ = writeln!(&mut io::stderr(), "{}", out_string);
             }
         }
     }
