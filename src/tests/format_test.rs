@@ -6,6 +6,7 @@ struct FormatTests {
 }
 
 impl FormatTests {
+    #[allow(dead_code)]
     fn new() -> FormatTests {
         FormatTests {
             layouts: vec![

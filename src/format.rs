@@ -1,7 +1,6 @@
 use regex::Regex;
 use std::str;
 use std::string::String;
-use std::marker::Sized;
 use super::Formatter;
 use super::Parted;
 use super::LogEntry;
@@ -13,10 +12,12 @@ pub struct Part {
 }
 
 impl Parted for Part {
+    #[inline]
     fn name(&self) -> &str {
         &self.name
     }
 
+    #[inline]
     fn layout(&self) -> &Option<String> {
         &(self.layout)
     }
@@ -27,6 +28,7 @@ pub struct StringFormatter {
 }
 
 impl StringFormatter {
+    #[inline]
     pub fn new(layout: &str) -> StringFormatter {
         let parts = StringFormatter::parse_parts(layout);
         StringFormatter {
@@ -34,6 +36,7 @@ impl StringFormatter {
         }
     }
 
+    #[inline]
     fn parse_parts(layout: &str) -> Vec<Part> {
         let regex = Regex::new(r"%\{([a-zA-Z]+)(?::(.*?[^\\]))?\}").unwrap();
 
@@ -86,6 +89,7 @@ impl StringFormatter {
 
 impl Formatter for StringFormatter {
 
+    #[inline]
     fn parse(&self, record: &LogEntry) -> String
     {
         let mut res = String::with_capacity(100);
@@ -94,7 +98,6 @@ impl Formatter for StringFormatter {
         }
         res
     }
-
 }
 
 #[inline]

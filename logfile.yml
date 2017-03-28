@@ -11,24 +11,33 @@ Formatter:
 
 Appender:
   - name: default
-    - kind: StdChannel
+    - kind: StdOutput
   - name: file
-    - kind: FileChannel
-      worker: 3
+    - kind: FileOutput
+
+Channel:
+  - name: default
+    worker: 1
+  - name: file
+    worker: 3
+
 
 
 intro:
   - validlevel: info
     formatter: default
     output: defalut,file
-#  - validlevel: debug
-#    formatter: default
-#    output:
-#      - name: default
-#        formatter: line
-#      - name: file1
-#        level: info
-#        formatter: onlymessage
+    channel: default
+  - validlevel: debug
+    formatter: default
+    channel: default
+    output:
+      - name: default
+        formatter: line
+      - name: file1
+        level: info
+        formatter: onlymessage
+        channel: file
 
 
 

@@ -1,9 +1,12 @@
+#![allow(dead_code)]
 #[macro_use]
 extern crate log;
 
 extern crate regex;
-extern crate mio;
-
+extern crate time;
+extern crate rand;
+extern crate futures;
+extern crate futures_cpupool;
 
 use log::{LogLevel, LogLevelFilter, LogLocation, SetLoggerError, LogMetadata, LogRecord};
 use std::collections::HashMap;
@@ -12,22 +15,20 @@ use std::mem;
 
 mod format;
 mod output;
-mod event;
+mod channel;
 
-use output::stdout::*;
-use output::*;
-use std::sync::{Arc, Mutex};
-use mio::channel;
-use std::cmp::Eq;
-use std::hash::Hash;
-use std::hash::Hasher;
-use std::fmt;
+use std::sync::{Arc};
 
 const DEFAULT_FORMAT_STRING: &'static str = "%{level}:\t%{modulePath}\t%{message}";
 
+type LogExactExecutors = HashMap<&'static str, HashMap<&'static str, LogExecute>>;
+type LogModuleExecutors = HashMap<&'static str, LogExecute>;
+type LogTargetExecutors = HashMap<&'static str, LogExecute>;
+
+
+
 pub trait Channeled: Send + Sync {
     fn send(&self, strings: Arc<LogEntry>);
-    fn sync_send(&self, strings: Arc<LogEntry>);
 }
 
 pub trait Parted {
@@ -36,7 +37,7 @@ pub trait Parted {
 }
 
 
-pub trait Formatter {
+pub trait Formatter: Send + Sync {
     fn parse(&self, record: &LogEntry) -> String;
 }
 
@@ -82,15 +83,16 @@ impl PartialEq for LogDirective {
     }
 }
 
+
 struct LogExecute {
     //控制过滤条件到指定的channel
-    outputs: HashMap<Option<i32>, Vec<Box<Channeled>>>,
+    outputs: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
     //控制是否输出
     directive: Vec<LogDirective>,
-    sync: bool,
 }
 
 impl LogExecute {
+    #[inline]
     fn control(&self, record: &LogRecord) {
         if self.decision_directive(record) {
             let outputs = self.decision_outouts(record);
@@ -103,31 +105,26 @@ impl LogExecute {
             let entry_arc = Arc::new(entry);
 
             for output in outputs {
-                if self.sync {
-                    output.sync_send(entry_arc.clone());
-                } else {
-                    output.send(entry_arc.clone());
-                }
+                output.clone().send(entry_arc.clone());
             }
         }
     }
-
-    fn decision_outouts(&self, record: &LogRecord) -> &Vec<Box<Channeled>> {
+    #[inline]
+    fn decision_outouts(&self, record: &LogRecord) -> &Vec<Arc<Channeled>> {
         let level = Some(record.level() as i32);
         match self.outputs.get(&level) {
             Some(output) => {
-                &output
+                output
             },
             None => {
-                &self.outputs.get(&None).expect("no have any default outputs for this log execute")
+                self.outputs.get(&None).expect("no have any default outputs for this log execute")
             }
         }
     }
 
-
+    #[inline]
     fn decision_directive(&self, record: &LogRecord) -> bool {
         let level = record.level();
-        let target = record.target();
         for dir in self.directive.iter().rev() {
             match dir.name {
                 Some(..) | None => {
@@ -140,15 +137,13 @@ impl LogExecute {
 }
 
 struct LogExecuteBuilder {
-    outputs: HashMap<Option<i32>, Vec<Box<Channeled>>>,
+    outputs: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
     directive: Vec<LogDirective>,
-    sync: bool,
 }
 
 impl LogExecuteBuilder {
     pub fn new() -> LogExecuteBuilder {
         LogExecuteBuilder {
-            sync: false,
             outputs: HashMap::new(),
             directive: vec!(),
         }
@@ -162,13 +157,13 @@ impl LogExecuteBuilder {
         self
     }
 
-    pub fn add_output(&mut self, level: LogLevelFilter, channeled: Box<Channeled>) -> &mut Self {
-        self.outputs.entry(Some(level.to_log_level().unwrap() as i32)).or_insert(Vec::new()).push(channeled);
+    pub fn default_output(&mut self, channeled: Arc<Channeled>) -> &mut Self {
+        self.outputs.entry(None).or_insert(Vec::new()).push(channeled);
         self
     }
 
-    pub fn set_sync(&mut self, sync: bool) -> &mut Self {
-        self.sync = sync;
+    pub fn add_output(&mut self, level: LogLevelFilter, channeled: Arc<Channeled>) -> &mut Self {
+        self.outputs.entry(Some(level.to_log_level().unwrap() as i32)).or_insert(Vec::new()).push(channeled);
         self
     }
 
@@ -176,78 +171,86 @@ impl LogExecuteBuilder {
         LogExecute {
             directive: mem::replace(&mut self.directive, vec!()),
             outputs: mem::replace(&mut self.outputs, HashMap::new()),
-            sync: self.sync,
         }
     }
 }
 
+//type LogExecutors = HashMap<&'static str, HashMap<&'static str, LogExecute>>;
+//type LogModuleExecutors = HashMap<&'static str, LogExecute>;
+//type LogTargetExecutors = HashMap<&'static str, LogExecute>;
 
 #[allow(dead_code)]
 struct Logger {
-    formatter: HashMap<Option<&'static str>, HashMap<Option<&'static str>, LogExecute>>,
+    default: Option<LogExecute>,
+    exact_executors: LogExactExecutors,
+    target_executors: LogTargetExecutors,
+    module_executors: LogModuleExecutors,
 }
 
 impl Logger {
+    #[inline]
     fn control(&self, record: &LogRecord) {
-        println!("{}  {}", record.target(), record.location().module_path());
-        let target = Some(record.target());
-        let module = Some(record.location().module_path());
-        let none = None;
+        let target = &record.target();
+        let location = &record.location();
+        let module = location.module_path();
 
-        let execute = match self.formatter.get(&module) {
-            Some(executes) => {
-                match executes.get(&target) {
-                    Some(execute) => {
-                        execute
-                    }
-                    None => {
-                        executes.get(&None).unwrap()
-                    }
-                }
+
+        match self.find_exact(module, target).or_else(|| {
+            self.find_target(target)
+        }).or_else(|| {
+            self.find_module(module)
+        }).or_else(|| {
+            self.find_default()
+        }) {
+            Some(execute) => {
+                execute.control(record);
             },
-            None => {
-                let default_module = self.formatter.get(&none).unwrap();
-                match default_module.get(&target){
-                    Some(executes) =>{
-                        executes
-                    }
-                    None =>{
-                        default_module.get(&none).unwrap()
-                    }
-                }
-            }
-        };
-        execute.control(record);
+            None => {}
+        }
+    }
+
+    #[inline]
+    fn find_exact(&self, module: &str, target: &str) -> Option<&LogExecute> {
+        self.exact_executors.get(module).map_or(None, |x| {
+            x.get(target)
+        })
+    }
+
+    #[inline]
+    fn find_target(&self, target: &str) -> Option<&LogExecute> {
+        self.target_executors.get(target)
+    }
+
+    #[inline]
+    fn find_module(&self, module: &str) -> Option<&LogExecute> {
+        self.module_executors.get(module)
+    }
+
+    #[inline]
+    fn find_default(&self) -> Option<&LogExecute> {
+        self.default.as_ref()
     }
 }
 
 
 impl log::Log for Logger {
+    #[allow(unused_variables)]
     fn enabled(&self, metadata: &LogMetadata) -> bool {
         true
     }
 
     fn log(&self, record: &LogRecord) {
-        if record.location().module_path() == "intro" {
-            self.control(record);
-        }
-    }
-}
-
-impl Logger {
-    #[inline]
-    fn write(&self, formater: &format::StringFormatter, record: &LogRecord) {
-        if record.location().module_path() == "intro" {
-            //            self.outputs[0].send(formater.parse(|part| -> String{
-            //                parse(part, record)
-            //            }));
-        }
+        self.control(record);
     }
 }
 
 #[allow(dead_code)]
 struct LoggerBuilder {
-    formatter: HashMap<Option<&'static str>, HashMap<Option<&'static str>, LogExecute>>,
+    default: Option<LogExecute>,
+    exact_executors: LogExactExecutors,
+    target_executors: LogTargetExecutors,
+    module_executors: LogModuleExecutors,
+    max_level: LogLevelFilter,
 }
 
 
@@ -255,51 +258,59 @@ struct LoggerBuilder {
 impl LoggerBuilder {
     fn new() -> Self {
         LoggerBuilder {
-            formatter: HashMap::new()
+            default: None,
+            exact_executors: LogExactExecutors::new(),
+            target_executors: LogTargetExecutors::new(),
+            module_executors: LogModuleExecutors::new(),
+            max_level: LogLevelFilter::Trace,
         }
     }
 
     #[inline]
-    fn add_default_module_of_target_formatter(&mut self, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
-        self.__add_formatter(None, Some(target), builder);
+    fn default(&mut self, builder: &mut LogExecuteBuilder) -> &mut Self {
+        self.default = Some(builder.build());
         self
     }
 
     #[inline]
-    fn add_default_target_of_module_formatter(&mut self, module: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
-        self.__add_formatter(Some(module), None, builder);
+    fn target(&mut self, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
+        self.target_executors.insert(target, builder.build());
         self
     }
 
     #[inline]
-    fn add_formatter(&mut self, module: &'static str, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
-        self.__add_formatter(Some(module), Some(target), builder);
+    fn module(&mut self, module: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
+        self.module_executors.insert(module, builder.build());
         self
     }
 
     #[inline]
-    fn add_default_formater(&mut self, builder: &mut LogExecuteBuilder) -> &mut Self {
-        self.__add_formatter(None, None, builder);
+    fn exact(&mut self, module: &'static str, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
+        self.exact_executors.entry(module).or_insert(HashMap::new()).insert(target, builder.build());
+        self
+    }
+
+    #[inline]
+    fn set_max_logger(&mut self, max: LogLevelFilter) -> &mut Self {
+        self.max_level = max;
         self
     }
 
 
     fn build(&mut self) -> Logger {
         Logger {
-            formatter: mem::replace(&mut self.formatter, HashMap::new()),
+            default: mem::replace(&mut self.default, None),
+            exact_executors: mem::replace(&mut self.exact_executors, LogExactExecutors::new()),
+            target_executors: mem::replace(&mut self.target_executors, LogTargetExecutors::new()),
+            module_executors: mem::replace(&mut self.module_executors, LogModuleExecutors::new()),
         }
     }
 
     fn init_logger(&mut self) -> Result<(), SetLoggerError> {
         log::set_logger(|max_level| {
-            max_level.set(LogLevelFilter::Trace);
+            max_level.set(self.max_level);
             Box::new(self.build())
         })
-    }
-
-    fn __add_formatter(&mut self, module: Option<&'static str>, target: Option<&'static str>, builder: &mut LogExecuteBuilder) -> &mut Self {
-        self.formatter.entry(module).or_insert(HashMap::new()).insert(target, builder.build());
-        self
     }
 }
 
@@ -308,57 +319,80 @@ impl LoggerBuilder {
 mod tests;
 
 #[test]
-fn format_log_execute_build() {
-    let o = Arc::new(Std::new(Direction::STDOUT,
-                              format::StringFormatter::new(DEFAULT_FORMAT_STRING
-                              )));
-    let execute = LogExecuteBuilder::new()
-        .add_log_directive(None, LogLevelFilter::Info)
-        .add_log_directive(None, LogLevelFilter::Debug)
-        .add_output(LogLevelFilter::Info, Box::new(StdChannel::new(event::EventPool::new(o.clone()), o.clone())))
-        .set_sync(false)
-        .build();
-    //    assert_eq!(execute.directive.len(), 1);
-    //
-    //    let ref dir = execute.directive[0];
-    //    assert_eq!(dir.name, None);
-    //    assert_eq!(dir.level, LogLevelFilter::Info);
-    //    assert_eq!(execute.sync, false);
-}
-
-
-#[test]
 fn format_parse() {
     use std::thread;
     use std::time::{SystemTime};
-    let o1 = Arc::new(Std::new(Direction::STDOUT,
-                               format::StringFormatter::new(DEFAULT_FORMAT_STRING
-                               )));
+    use std::fs::OpenOptions;
+    use std::io;
+    use output::*;
+    use channel;
+    use channel::EventRouterBuilder;
+    use std::os::unix::io::AsRawFd;
 
-    let o2 = Arc::new(Std::new(Direction::STDOUT,
-                               format::StringFormatter::new("%{file}:%{line}\t\t%{message}")));
+
+
+    let file = output::file::File::new("./a/a").expect("can't open file");
+
+    let fd = file.as_raw_fd();
+
+    let o1 = Arc::new(OutputLock::new(io::stdout()));
+    let o2 = Arc::new(output::OutputLock::new(file));
+
+
+
+
+    let timer_strategy = roll::time::TimeStrategy {};
+
+    let mut roll = roll::RoleBuilder::new().add(o2.clone(),Arc::new(timer_strategy)).build();
+    roll.run();
+
+
+
+
+    let formatter1 = Arc::new(format::StringFormatter::new(DEFAULT_FORMAT_STRING));
+    let formatter2 = Arc::new(format::StringFormatter::new("%{message}"));
+
+
+    let mut event_router_builder = EventRouterBuilder::new(formatter1);
+
+    event_router_builder.add(o1.clone());
+
+    let mut event_router_builder2 = EventRouterBuilder::new(formatter2);
+
+    event_router_builder2.add(o2.clone());
+
+    let mut event_pool_builder = channel::EventPoolBuilder::new(1);
+
+    event_pool_builder.add(LogLevelFilter::Info, &mut event_router_builder);
+    event_pool_builder.add(LogLevelFilter::Error, &mut event_router_builder2);
+//    event_pool_builder.add(LogLevelFilter::Error, &mut event_router_builder);
+    event_pool_builder.default(&mut event_router_builder);
+
+
+    let channel = Arc::new(event_pool_builder.build());
+
 
     let mut execute = LogExecuteBuilder::new();
 
     execute
         .add_log_directive(None, LogLevelFilter::Info)
-        .add_output(LogLevelFilter::Info, Box::new(StdChannel::new(event::EventPool::new(o1.clone()), o1.clone())))
-        .set_sync(false);
+        .default_output(channel.clone())
+        .add_output(LogLevelFilter::Info, channel.clone());
 
-    let mut execute2 = LogExecuteBuilder::new();
-
-    execute2
-        .add_log_directive(None, LogLevelFilter::Info)
-        .add_output(LogLevelFilter::Info, Box::new(StdChannel::new(event::EventPool::new(o2.clone()), o2.clone())))
-        .set_sync(false);
-
+    //    //    let mut execute2 = LogExecuteBuilder::new();
+    //    //
+    //    //    execute2
+    //    //        .add_log_directive(None, LogLevelFilter::Info)
+    //    //        .add_output(LogLevelFilter::Info, Box::new(StdChannel::new(event::EventPool::new(o2.clone()), o2.clone())))
+    //    //        .set_sync(false);
+    //
     LoggerBuilder::new()
-        .add_default_formater(&mut execute)
-        .add_default_module_of_target_formatter("test", &mut execute2)
+        .module(module_path!(), &mut execute)
+        .set_max_logger(LogLevelFilter::Info)
         .init_logger();
-
+    //
     let now = SystemTime::now();
-    info!("{}", "test o");
+    error!("{}", "test o 1111111111 22222222222 3333333333");
     match now.elapsed() {
         Ok(elapsed) => {
             // it prints '2'
@@ -368,39 +402,36 @@ fn format_parse() {
             // an error occured!
             println!("Error: {:?}", e);
         }
-    }
-    info!(target: "test", "1111");
-    thread::sleep_ms(2000);
+    };
+    //    thread::sleep_ms(2000);
 
 
-
-
-    //        use std::thread;
-    //        use std::time::{SystemTime};
+    //            use std::thread;
+    //            use std::time::{SystemTime};
 
     //    let _ = init();
-    //        let mut children = vec![];
-    //
-    //        let now = SystemTime::now();
-    //        for i in 0..5 {
-    //            children.push(thread::spawn(move || {
-    //                for j in 0..1000 {
-    //                    info!("{} {}", i, j);
-    //                }
-    //            }));
-    //        }
-    //        for child in children {
-    //            child.join().unwrap()
-    //        }
-    //        match now.elapsed() {
-    //            Ok(elapsed) => {
-    //                // it prints '2'
-    //                println!("time is {}", elapsed.subsec_nanos());
-    //            }
-    //            Err(e) => {
-    //                // an error occured!
-    //                println!("Error: {:?}", e);
-    //            }
-    //        }
-    //        thread::sleep_ms(3000)
+    //    let mut children = vec![];
+
+    for i in 0..5 {
+        thread::spawn(move || {
+            let now = SystemTime::now();
+            for j in 0..1000 {
+                error!(target: "test", "{} {} ", i, j );
+            }
+            match now.elapsed() {
+                Ok(elapsed) => {
+                    // it prints '2'
+                    println!("time is {}", elapsed.subsec_nanos());
+                }
+                Err(e) => {
+                    // an error occured!
+                    println!("Error: {:?}", e);
+                }
+            }
+        });
+    }
+//    for child in children {
+//        child.join().unwrap()
+//    }
+    thread::sleep_ms(30000);
 }
