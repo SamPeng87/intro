@@ -4,6 +4,11 @@ use std::string::String;
 use super::Formatter;
 use super::Parted;
 use super::LogEntry;
+use chrono::prelude::*;
+use chrono::{NaiveDateTime,TimeZone, NaiveDate,Local};
+use time;
+use time::{Timespec,Tm};
+
 
 
 pub struct Part {
@@ -59,12 +64,19 @@ impl StringFormatter {
             };
 
             let substrings = layout[start + 2..end - 1].to_string();
-            let split: Vec<String> = substrings.split(":").map(String::from).collect();
+            let mut split: Vec<String> = substrings.split(":").map(String::from).collect();
             let name = split[0].clone();
             let layout = match split.len() {
                 2 => Some(split[1].clone()),
-                _ => None,
+                0|1 => None,
+                _ => {
+                    split.remove(0);
+                    Some(split.connect(":"))
+                },
             };
+            print!("{:?}", split.len());
+            print!("{:?}", layout);
+
 
             parts.push(Part {
                 name: name,
@@ -88,7 +100,6 @@ impl StringFormatter {
 
 
 impl Formatter for StringFormatter {
-
     #[inline]
     fn parse(&self, record: &LogEntry) -> String
     {
@@ -102,6 +113,7 @@ impl Formatter for StringFormatter {
 
 #[inline]
 fn parse(part: &Part, args: &LogEntry) -> String {
+
     match part.name() {
         "string" => {
             match part.layout() {
@@ -109,6 +121,22 @@ fn parse(part: &Part, args: &LogEntry) -> String {
                     return layout.clone(),
                 _ =>
                     return "".to_string(),
+            };
+        }
+        "datetime" => {
+            let now = get_record_date_time(args.time);
+            match part.layout() {
+                &Some(ref layout) =>
+                    match layout.as_str() {
+                        "rfc2822" =>
+                            return now.to_rfc2822(),
+                        "rfc3339" =>
+                            return now.to_rfc3339(),
+                        _ =>
+                            return now.format(layout).to_string(),
+                    },
+                _ =>
+                    return now.to_string(),
             };
         }
         "line" => {
@@ -132,4 +160,33 @@ fn parse(part: &Part, args: &LogEntry) -> String {
             return format!("{}", "");
         }
     }
+}
+
+#[inline]
+fn get_record_date_time(ts: Timespec) -> DateTime<Local>{
+    let mut tm = time::at(ts);
+
+    if tm.tm_sec >= 60 {
+        tm.tm_nsec += (tm.tm_sec - 59) * 1_000_000_000;
+        tm.tm_sec = 59;
+    }
+
+    #[cfg(not(windows))]
+    fn tm_to_naive_date(tm: &time::Tm) -> NaiveDate {
+        // from_yo is more efficient than from_ymd (since it's the internal representation).
+        NaiveDate::from_yo(tm.tm_year + 1900, tm.tm_yday as u32 + 1)
+    }
+
+    #[cfg(windows)]
+    fn tm_to_naive_date(tm: &oldtime::Tm) -> NaiveDate {
+        // ...but tm_yday is broken in Windows (issue #85)
+        NaiveDate::from_ymd(tm.tm_year + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32)
+    }
+
+    let date = tm_to_naive_date(&tm);
+    let time = NaiveTime::from_hms_nano(tm.tm_hour as u32, tm.tm_min as u32,
+                                        tm.tm_sec as u32, tm.tm_nsec as u32);
+    let offset = FixedOffset::east(tm.tm_utcoff);
+    DateTime::from_utc(date.and_time(time) - offset, offset)
+
 }

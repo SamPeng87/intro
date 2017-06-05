@@ -4,9 +4,8 @@ extern crate log;
 
 extern crate regex;
 extern crate time;
-extern crate rand;
-extern crate futures;
-extern crate futures_cpupool;
+extern crate crossbeam;
+extern crate chrono;
 
 use log::{LogLevel, LogLevelFilter, LogLocation, SetLoggerError, LogMetadata, LogRecord};
 use std::collections::HashMap;
@@ -18,13 +17,13 @@ mod output;
 mod channel;
 
 use std::sync::{Arc};
+use time::{Timespec};
 
-const DEFAULT_FORMAT_STRING: &'static str = "%{level}:\t%{modulePath}\t%{message}";
+const DEFAULT_FORMAT_STRING: &'static str = "%{datetime:rfc3339}\t%{level}:\t%{modulePath}\t%{message}";
 
 type LogExactExecutors = HashMap<&'static str, HashMap<&'static str, LogExecute>>;
 type LogModuleExecutors = HashMap<&'static str, LogExecute>;
 type LogTargetExecutors = HashMap<&'static str, LogExecute>;
-
 
 
 pub trait Channeled: Send + Sync {
@@ -52,6 +51,7 @@ pub struct LogEntry {
     location: LogLocation,
     msg: String,
     level: LogLevel,
+    time: Timespec,
 }
 
 impl LogEntry {
@@ -96,11 +96,14 @@ impl LogExecute {
     fn control(&self, record: &LogRecord) {
         if self.decision_directive(record) {
             let outputs = self.decision_outouts(record);
+            let now = time::get_time();
+
 
             let entry = LogEntry {
                 level: record.level(),
                 msg: format!("{}", record.args()),
                 location: record.location().clone(),
+                time: now,
             };
             let entry_arc = Arc::new(entry);
 
@@ -115,7 +118,7 @@ impl LogExecute {
         match self.outputs.get(&level) {
             Some(output) => {
                 output
-            },
+            }
             None => {
                 self.outputs.get(&None).expect("no have any default outputs for this log execute")
             }
@@ -204,7 +207,7 @@ impl Logger {
         }) {
             Some(execute) => {
                 execute.control(record);
-            },
+            }
             None => {}
         }
     }
@@ -315,9 +318,6 @@ impl LoggerBuilder {
 }
 
 
-#[cfg(test)]
-mod tests;
-
 #[test]
 fn format_parse() {
     use std::thread;
@@ -325,74 +325,39 @@ fn format_parse() {
     use std::fs::OpenOptions;
     use std::io;
     use output::*;
-    use channel;
-    use channel::EventRouterBuilder;
-    use std::os::unix::io::AsRawFd;
-
-
+    use channel::*;
 
     let file = output::file::File::new("./a/a").expect("can't open file");
 
-    let fd = file.as_raw_fd();
-
     let o1 = Arc::new(OutputLock::new(io::stdout()));
+
     let o2 = Arc::new(output::OutputLock::new(file));
 
-
-
-
-    let timer_strategy = roll::time::TimeStrategy {};
-
-    let mut roll = roll::RoleBuilder::new().add(o2.clone(),Arc::new(timer_strategy)).build();
-    roll.run();
-
-
-
-
     let formatter1 = Arc::new(format::StringFormatter::new(DEFAULT_FORMAT_STRING));
-    let formatter2 = Arc::new(format::StringFormatter::new("%{message}"));
+//    let formatter2 = Arc::new(format::StringFormatter::new("%{message}"));
 
+    let mut event_router_builder = single_channel::EventRouterBuilder::new(formatter1);
+    event_router_builder.add(o1);
+    event_router_builder.add(o2);
 
-    let mut event_router_builder = EventRouterBuilder::new(formatter1);
+    let mut event_router_filter_builder = single_channel::EventRouterFilterBuilder::new();
+    event_router_filter_builder.add(LogLevelFilter::Info, &mut event_router_builder);
 
-    event_router_builder.add(o1.clone());
-
-    let mut event_router_builder2 = EventRouterBuilder::new(formatter2);
-
-    event_router_builder2.add(o2.clone());
-
-    let mut event_pool_builder = channel::EventPoolBuilder::new(1);
-
-    event_pool_builder.add(LogLevelFilter::Info, &mut event_router_builder);
-    event_pool_builder.add(LogLevelFilter::Error, &mut event_router_builder2);
-//    event_pool_builder.add(LogLevelFilter::Error, &mut event_router_builder);
-    event_pool_builder.default(&mut event_router_builder);
-
-
-    let channel = Arc::new(event_pool_builder.build());
-
+    let channel = Arc::new(single_channel::FileChannel::new(&mut event_router_filter_builder));
 
     let mut execute = LogExecuteBuilder::new();
 
     execute
         .add_log_directive(None, LogLevelFilter::Info)
-        .default_output(channel.clone())
-        .add_output(LogLevelFilter::Info, channel.clone());
+        .default_output(channel.clone());
 
-    //    //    let mut execute2 = LogExecuteBuilder::new();
-    //    //
-    //    //    execute2
-    //    //        .add_log_directive(None, LogLevelFilter::Info)
-    //    //        .add_output(LogLevelFilter::Info, Box::new(StdChannel::new(event::EventPool::new(o2.clone()), o2.clone())))
-    //    //        .set_sync(false);
-    //
     LoggerBuilder::new()
         .module(module_path!(), &mut execute)
         .set_max_logger(LogLevelFilter::Info)
         .init_logger();
-    //
+
     let now = SystemTime::now();
-    error!("{}", "test o 1111111111 22222222222 3333333333");
+    info!("{}", "test o 1111111111 22222222222 3333333333");
     match now.elapsed() {
         Ok(elapsed) => {
             // it prints '2'
@@ -403,35 +368,35 @@ fn format_parse() {
             println!("Error: {:?}", e);
         }
     };
-    //    thread::sleep_ms(2000);
+    thread::sleep_ms(2000);
 
 
     //            use std::thread;
-    //            use std::time::{SystemTime};
-
-    //    let _ = init();
-    //    let mut children = vec![];
-
-    for i in 0..5 {
-        thread::spawn(move || {
-            let now = SystemTime::now();
-            for j in 0..1000 {
-                error!(target: "test", "{} {} ", i, j );
-            }
-            match now.elapsed() {
-                Ok(elapsed) => {
-                    // it prints '2'
-                    println!("time is {}", elapsed.subsec_nanos());
-                }
-                Err(e) => {
-                    // an error occured!
-                    println!("Error: {:?}", e);
-                }
-            }
-        });
-    }
-//    for child in children {
-//        child.join().unwrap()
-//    }
-    thread::sleep_ms(30000);
+    //    //            use std::time::{SystemTime};
+    //
+    //    //    let _ = init();
+    //    //    let mut children = vec![];
+    //
+    ////    for i in 0..5 {
+    ////        thread::spawn(move || {
+    ////            let now = SystemTime::now();
+    ////            for j in 0..1000 {
+    ////                error!(target: "test", "{} {} ", i, j );
+    ////            }
+    ////            match now.elapsed() {
+    ////                Ok(elapsed) => {
+    ////                    // it prints '2'
+    ////                    println!("time is {}", elapsed.subsec_nanos());
+    ////                }
+    ////                Err(e) => {
+    ////                    // an error occured!
+    ////                    println!("Error: {:?}", e);
+    ////                }
+    ////            }
+    ////        });
+    ////    }
+    ////    for child in children {
+    ////        child.join().unwrap()
+    ////    }
+    //    thread::sleep_ms(30000);
 }
