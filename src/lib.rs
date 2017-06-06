@@ -128,7 +128,7 @@ impl LogExecute {
     }
 }
 
-struct LogExecuteBuilder {
+pub struct LogExecuteBuilder {
     channels: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
 }
 
@@ -150,7 +150,7 @@ impl LogExecuteBuilder {
         self
     }
 
-    pub fn build(&mut self) -> LogExecute {
+    fn build(&mut self) -> LogExecute {
         LogExecute {
             channels: mem::replace(&mut self.channels, HashMap::new()),
         }
@@ -223,7 +223,7 @@ impl log::Log for Logger {
 }
 
 #[allow(dead_code)]
-struct LoggerBuilder {
+pub struct LoggerBuilder {
     default: Option<LogExecute>,
     exact_executors: LogExactExecutors,
     target_executors: LogTargetExecutors,
