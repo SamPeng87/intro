@@ -171,6 +171,7 @@ impl Logger {
         let target = &record.target();
         let location = &record.location();
         let module = location.module_path();
+        println!("{:?} {:?} {:?}",target,location,module);
 
 
         match self.find_exact(module, target).or_else(|| {
