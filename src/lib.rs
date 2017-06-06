@@ -28,6 +28,7 @@ const DEFAULT_FORMAT_STRING: &'static str = "%{datetime:rfc3339}\t%{level}:\t%{m
 
 type LogExactExecutors = HashMap<&'static str, HashMap<&'static str, LogExecute>>;
 type LogModuleExecutors = HashMap<&'static str, LogExecute>;
+type LogPrefixModuleExecutors = HashMap<&'static str, LogExecute>;
 type LogTargetExecutors = HashMap<&'static str, LogExecute>;
 
 
@@ -109,22 +110,27 @@ impl LogExecute {
         };
         let entry_arc = Arc::new(entry);
 
+        println!("1111111111113 {}",self.channels.len());
+
+
         for (level_key, channels) in &self.channels {
             match level_key {
                 &Some(l) => {
                     if level > l as usize {
-                        return
-                    }
+                        println!("11111111111112");
+                        return;
+                    };
                 }
-                &None => {}
-            }
+                &None => {
+                    println!("1111111111111");
+                }
+            };
 
 
             for channel in channels {
                 channel.clone().send(entry_arc.clone());
-            }
+            };
         }
-
     }
 }
 
@@ -151,8 +157,10 @@ impl LogExecuteBuilder {
     }
 
     fn build(&mut self) -> LogExecute {
+        let mut clone = self.channels.clone();
+
         LogExecute {
-            channels: mem::replace(&mut self.channels, HashMap::new()),
+            channels: mem::replace(&mut clone, HashMap::new()),
         }
     }
 }
@@ -163,6 +171,7 @@ struct Logger {
     exact_executors: LogExactExecutors,
     target_executors: LogTargetExecutors,
     module_executors: LogModuleExecutors,
+    prefix_module_executors: LogPrefixModuleExecutors,
 }
 
 impl Logger {
@@ -171,13 +180,13 @@ impl Logger {
         let target = &record.target();
         let location = &record.location();
         let module = location.module_path();
-        println!("{:?} {:?} {:?}",target,location,module);
-
 
         match self.find_exact(module, target).or_else(|| {
             self.find_target(target)
         }).or_else(|| {
             self.find_module(module)
+        }).or_else(||{
+            self.find_prefix_module(module)
         }).or_else(|| {
             self.find_default()
         }) {
@@ -202,7 +211,17 @@ impl Logger {
 
     #[inline]
     fn find_module(&self, module: &str) -> Option<&LogExecute> {
+
         self.module_executors.get(module)
+    }
+    #[inline]
+    fn find_prefix_module(&self, module: &str) -> Option<&LogExecute> {
+        for (name,execute) in &self.prefix_module_executors{
+            if module.starts_with(name){
+                return Some(execute)
+            }
+        }
+        return None
     }
 
     #[inline]
@@ -229,6 +248,7 @@ pub struct LoggerBuilder {
     exact_executors: LogExactExecutors,
     target_executors: LogTargetExecutors,
     module_executors: LogModuleExecutors,
+    prefix_module_executors: LogPrefixModuleExecutors,
     max_level: LogLevelFilter,
 }
 
@@ -241,6 +261,7 @@ impl LoggerBuilder {
             exact_executors: LogExactExecutors::new(),
             target_executors: LogTargetExecutors::new(),
             module_executors: LogModuleExecutors::new(),
+            prefix_module_executors: LogPrefixModuleExecutors::new(),
             max_level: LogLevelFilter::Trace,
         }
     }
@@ -259,7 +280,17 @@ impl LoggerBuilder {
 
     #[inline]
     pub fn module(&mut self, module: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
-        self.module_executors.insert(module, builder.build());
+        if module.ends_with("::*"){
+            let name_level = &module[0..module.len()-1];
+
+            let fullname = &module[0..module.len()-3];
+            println!("name {}, {}", name_level,fullname);
+            self.prefix_module_executors.insert(&name_level, builder.build());
+            self.module_executors.insert(fullname, builder.build());
+
+        }else{
+            self.module_executors.insert(module, builder.build());
+        }
         self
     }
 
@@ -282,6 +313,7 @@ impl LoggerBuilder {
             exact_executors: mem::replace(&mut self.exact_executors, LogExactExecutors::new()),
             target_executors: mem::replace(&mut self.target_executors, LogTargetExecutors::new()),
             module_executors: mem::replace(&mut self.module_executors, LogModuleExecutors::new()),
+            prefix_module_executors: mem::replace(&mut self.prefix_module_executors, LogPrefixModuleExecutors::new()),
         }
     }
 
@@ -317,7 +349,7 @@ fn format_parse() {
     //    event_router_builder.add(o2);
 
     let mut event_router_filter_builder = single_channel::EventRouterFilterBuilder::new();
-//    event_router_filter_builder.add(LogLevelFilter::Debug, &mut event_router_builder);
+    //    event_router_filter_builder.add(LogLevelFilter::Debug, &mut event_router_builder);
     event_router_filter_builder.default(&mut event_router_builder);
 
 
@@ -329,7 +361,7 @@ fn format_parse() {
         .add_channels(LogLevelFilter::Info, channel.clone());
 
     LoggerBuilder::new()
-        .module(module_path!(), &mut execute)
+        .module(concat!(module_path!(),"::*"), &mut execute)
         .set_max_logger(LogLevelFilter::Trace)
         .init_logger();
 
