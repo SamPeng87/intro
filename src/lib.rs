@@ -234,7 +234,7 @@ pub struct LoggerBuilder {
 
 #[allow(dead_code)]
 impl LoggerBuilder {
-    fn new() -> Self {
+    pub fn new() -> Self {
         LoggerBuilder {
             default: None,
             exact_executors: LogExactExecutors::new(),
@@ -245,37 +245,37 @@ impl LoggerBuilder {
     }
 
     #[inline]
-    fn default(&mut self, builder: &mut LogExecuteBuilder) -> &mut Self {
+    pub fn default(&mut self, builder: &mut LogExecuteBuilder) -> &mut Self {
         self.default = Some(builder.build());
         self
     }
 
     #[inline]
-    fn target(&mut self, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
+    pub fn target(&mut self, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
         self.target_executors.insert(target, builder.build());
         self
     }
 
     #[inline]
-    fn module(&mut self, module: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
+    pub fn module(&mut self, module: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
         self.module_executors.insert(module, builder.build());
         self
     }
 
     #[inline]
-    fn exact(&mut self, module: &'static str, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
+    pub fn exact(&mut self, module: &'static str, target: &'static str, builder: &mut LogExecuteBuilder) -> &mut Self {
         self.exact_executors.entry(module).or_insert(HashMap::new()).insert(target, builder.build());
         self
     }
 
     #[inline]
-    fn set_max_logger(&mut self, max: LogLevelFilter) -> &mut Self {
+    pub fn set_max_logger(&mut self, max: LogLevelFilter) -> &mut Self {
         self.max_level = max;
         self
     }
 
 
-    fn build(&mut self) -> Logger {
+    pub fn build(&mut self) -> Logger {
         Logger {
             default: mem::replace(&mut self.default, None),
             exact_executors: mem::replace(&mut self.exact_executors, LogExactExecutors::new()),
@@ -284,7 +284,7 @@ impl LoggerBuilder {
         }
     }
 
-    fn init_logger(&mut self) -> Result<(), SetLoggerError> {
+    pub fn init_logger(&mut self) -> Result<(), SetLoggerError> {
         log::set_logger(|max_level| {
             max_level.set(self.max_level);
             Box::new(self.build())
