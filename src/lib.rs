@@ -110,19 +110,14 @@ impl LogExecute {
         };
         let entry_arc = Arc::new(entry);
 
-        println!("1111111111113 {}",self.channels.len());
-
-
         for (level_key, channels) in &self.channels {
             match level_key {
                 &Some(l) => {
                     if level > l as usize {
-                        println!("11111111111112");
                         return;
                     };
                 }
                 &None => {
-                    println!("1111111111111");
                 }
             };
 
@@ -366,6 +361,7 @@ fn format_parse() {
         .init_logger();
 
     let now = SystemTime::now();
+
     info!("{}", "test o 1111111111 22222222222 3333333333");
     debug!("{}", "test o 1111111111 22222222222 3333333333");
     error!("{}", "test o 1111111111 22222222222 3333333333");
