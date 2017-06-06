@@ -87,7 +87,7 @@ impl EventRouterFilterBuilder {
     }
 
     #[inline]
-    pub fn build(&mut self) -> &mut HashMap<Option<i32>, Vec<EventRouter>> {
+    fn build(&mut self) -> &mut HashMap<Option<i32>, Vec<EventRouter>> {
         &mut self.router
     }
 }
