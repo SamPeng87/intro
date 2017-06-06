@@ -275,7 +275,7 @@ impl LoggerBuilder {
     }
 
 
-    pub fn build(&mut self) -> Logger {
+    fn build(&mut self) -> Logger {
         Logger {
             default: mem::replace(&mut self.default, None),
             exact_executors: mem::replace(&mut self.exact_executors, LogExactExecutors::new()),
