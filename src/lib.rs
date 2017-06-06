@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::mem;
 
 
-mod format;
-mod output;
-mod channel;
+pub mod format;
+pub mod output;
+pub mod channel;
 mod level_color;
 
 use std::sync::{Arc};
