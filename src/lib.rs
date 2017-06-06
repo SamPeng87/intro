@@ -325,7 +325,7 @@ fn format_parse() {
     let mut execute = LogExecuteBuilder::new();
 
     execute
-        .add_channels(LogLevelFilter::Info, channel.clone())
+        .add_channels(LogLevelFilter::Info, channel.clone());
 
     LoggerBuilder::new()
         .module(module_path!(), &mut execute)
