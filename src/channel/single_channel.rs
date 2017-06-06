@@ -78,7 +78,7 @@ impl EventRouterFilterBuilder {
     }
 
     pub fn add(&mut self, level: LogLevelFilter, router: &mut EventRouterBuilder) -> &mut Self {
-        self.router.entry(Some(level.to_log_level().unwrap() as i32)).or_insert(Vec::new()).push(router.build());
+        self.router.entry(Some(level as i32)).or_insert(Vec::new()).push(router.build());
         self
     }
     pub fn default(&mut self, router: &mut EventRouterBuilder) -> &mut Self {
@@ -120,7 +120,7 @@ impl FileChannel {
     fn work(rx: Arc<MsQueue<OutputEntry>>) {
         loop {
             let entry = rx.clone().pop();
-            let data = entry.formatter.parse(&(entry.entry));
+            let data = entry.formatter.parse(entry.output.has_color(), &(entry.entry));
             entry.output.push(data.as_str());
             drop(entry)
         }
@@ -129,44 +129,40 @@ impl FileChannel {
 
 impl Channeled for FileChannel {
     fn send(&self, data: Arc<LogEntry>) {
-        let routers = match self.router.get(&Some(data.level() as i32)) {
-            Some(router) => {
-                router
+        let level = &Some(data.level() as i32);
+        self.router.get(level).or_else(|| {
+            self.router.get(&None)
+        }).map(|routers| {
+            for r in routers {
+                r.gateway(&self.queue, data.clone());
             }
-            None => {
-                self.router.get(&None).expect("this channel not have default executer")
-            }
-        };
-
-        for r in routers {
-            r.gateway(&self.queue, data.clone());
-        }
+        });
     }
 }
 
 #[test]
 fn test_file_channel() {
-//    use std::thread;
-//    use std::time::SystemTime;
+    //    use std::thread;
+    //    use std::time::SystemTime;
 
-//    let channel = FileChannel::new();
-//    let now = SystemTime::now();
-//
-//    for i in 0..10000000 {
-//        let entry = LogEntry {
-//            location: LogLocation {
-//                __module_path: "123",
-//                __file: "321",
-//                __line: 12,
-//            },
-//            msg: "test".to_string(),
-//            level: LogLevel::Warn,
-//        };
-//        let now = SystemTime::now();
-//        let test = Arc::new(entry);
-//        channel.send(test.clone());
-//    }
-//
-//    thread::sleep_ms(3000000);
+    //    let channel = FileChannel::new();
+    //    let now = SystemTime::now();
+    //
+    //    for i in 0..10000000 {
+    //        let entry = LogEntry {
+    //            location: LogLocation {
+    //                __module_path: "123",
+    //                __file: "321",
+    //                __line: 12,
+    //            },
+    //            msg: "test".to_string(),
+    //            level: LogLevel::Warn,
+    //        };
+    //        let now = SystemTime::now();
+    //        let test = Arc::new(entry);
+    //        channel.send(test.clone());
+    //    }
+    //
+    //    thread::sleep_ms(3000000);
 }
 

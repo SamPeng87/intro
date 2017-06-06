@@ -5,10 +5,10 @@ use super::Formatter;
 use super::Parted;
 use super::LogEntry;
 use chrono::prelude::*;
-use chrono::{NaiveDateTime,TimeZone, NaiveDate,Local};
+use chrono::{NaiveDateTime, TimeZone, NaiveDate, Local};
 use time;
-use time::{Timespec,Tm};
-
+use time::{Timespec, Tm};
+use level_color;
 
 
 pub struct Part {
@@ -68,14 +68,12 @@ impl StringFormatter {
             let name = split[0].clone();
             let layout = match split.len() {
                 2 => Some(split[1].clone()),
-                0|1 => None,
+                0 | 1 => None,
                 _ => {
                     split.remove(0);
                     Some(split.connect(":"))
-                },
+                }
             };
-            print!("{:?}", split.len());
-            print!("{:?}", layout);
 
 
             parts.push(Part {
@@ -101,11 +99,14 @@ impl StringFormatter {
 
 impl Formatter for StringFormatter {
     #[inline]
-    fn parse(&self, record: &LogEntry) -> String
+    fn parse(&self, color: bool, record: &LogEntry) -> String
     {
         let mut res = String::with_capacity(100);
         for part in &self.parts {
             res += &parse(part, record);
+        }
+        if color{
+            return level_color::get_color_by_level(record.level(), res.as_str())
         }
         res
     }
@@ -113,7 +114,6 @@ impl Formatter for StringFormatter {
 
 #[inline]
 fn parse(part: &Part, args: &LogEntry) -> String {
-
     match part.name() {
         "string" => {
             match part.layout() {
@@ -163,7 +163,7 @@ fn parse(part: &Part, args: &LogEntry) -> String {
 }
 
 #[inline]
-fn get_record_date_time(ts: Timespec) -> DateTime<Local>{
+fn get_record_date_time(ts: Timespec) -> DateTime<Local> {
     let mut tm = time::at(ts);
 
     if tm.tm_sec >= 60 {
@@ -188,5 +188,4 @@ fn get_record_date_time(ts: Timespec) -> DateTime<Local>{
                                         tm.tm_sec as u32, tm.tm_nsec as u32);
     let offset = FixedOffset::east(tm.tm_utcoff);
     DateTime::from_utc(date.and_time(time) - offset, offset)
-
 }

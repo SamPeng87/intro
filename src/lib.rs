@@ -2,10 +2,14 @@
 #[macro_use]
 extern crate log;
 
+#[macro_use]
+extern crate lazy_static;
+
 extern crate regex;
 extern crate time;
 extern crate crossbeam;
 extern crate chrono;
+extern crate ansi_term;
 
 use log::{LogLevel, LogLevelFilter, LogLocation, SetLoggerError, LogMetadata, LogRecord};
 use std::collections::HashMap;
@@ -15,6 +19,7 @@ use std::mem;
 mod format;
 mod output;
 mod channel;
+mod level_color;
 
 use std::sync::{Arc};
 use time::{Timespec};
@@ -37,7 +42,7 @@ pub trait Parted {
 
 
 pub trait Formatter: Send + Sync {
-    fn parse(&self, record: &LogEntry) -> String;
+    fn parse(&self, color: bool, record: &LogEntry) -> String;
 }
 
 
@@ -86,101 +91,71 @@ impl PartialEq for LogDirective {
 
 struct LogExecute {
     //控制过滤条件到指定的channel
-    outputs: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
-    //控制是否输出
-    directive: Vec<LogDirective>,
+    channels: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
 }
 
 impl LogExecute {
     #[inline]
     fn control(&self, record: &LogRecord) {
-        if self.decision_directive(record) {
-            let outputs = self.decision_outouts(record);
-            let now = time::get_time();
+        let level = record.level() as usize();
 
+        let now = time::get_time();
 
-            let entry = LogEntry {
-                level: record.level(),
-                msg: format!("{}", record.args()),
-                location: record.location().clone(),
-                time: now,
-            };
-            let entry_arc = Arc::new(entry);
+        let entry = LogEntry {
+            level: record.level(),
+            msg: format!("{}", record.args()),
+            location: record.location().clone(),
+            time: now,
+        };
+        let entry_arc = Arc::new(entry);
 
-            for output in outputs {
-                output.clone().send(entry_arc.clone());
-            }
-        }
-    }
-    #[inline]
-    fn decision_outouts(&self, record: &LogRecord) -> &Vec<Arc<Channeled>> {
-        let level = Some(record.level() as i32);
-        match self.outputs.get(&level) {
-            Some(output) => {
-                output
-            }
-            None => {
-                self.outputs.get(&None).expect("no have any default outputs for this log execute")
-            }
-        }
-    }
-
-    #[inline]
-    fn decision_directive(&self, record: &LogRecord) -> bool {
-        let level = record.level();
-        for dir in self.directive.iter().rev() {
-            match dir.name {
-                Some(..) | None => {
-                    return level <= dir.level
+        for (level_key, channels) in &self.channels {
+            match level_key {
+                &Some(l) => {
+                    if level > l as usize {
+                        return
+                    }
                 }
+                &None => {}
+            }
+
+
+            for channel in channels {
+                channel.clone().send(entry_arc.clone());
             }
         }
-        false
+
     }
 }
 
 struct LogExecuteBuilder {
-    outputs: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
-    directive: Vec<LogDirective>,
+    channels: HashMap<Option<i32>, Vec<Arc<Channeled>>>,
 }
 
 impl LogExecuteBuilder {
     pub fn new() -> LogExecuteBuilder {
         LogExecuteBuilder {
-            outputs: HashMap::new(),
-            directive: vec!(),
+            channels: HashMap::new(),
         }
     }
 
-    pub fn add_log_directive(&mut self, name: Option<&'static str>, level: LogLevelFilter) -> &mut Self {
-        self.directive.push(LogDirective {
-            name: name,
-            level: level,
-        });
+
+    pub fn default_channels(&mut self, channeled: Arc<Channeled>) -> &mut Self {
+        self.channels.entry(None).or_insert(Vec::new()).push(channeled);
         self
     }
 
-    pub fn default_output(&mut self, channeled: Arc<Channeled>) -> &mut Self {
-        self.outputs.entry(None).or_insert(Vec::new()).push(channeled);
-        self
-    }
-
-    pub fn add_output(&mut self, level: LogLevelFilter, channeled: Arc<Channeled>) -> &mut Self {
-        self.outputs.entry(Some(level.to_log_level().unwrap() as i32)).or_insert(Vec::new()).push(channeled);
+    pub fn add_channels(&mut self, level: LogLevelFilter, channeled: Arc<Channeled>) -> &mut Self {
+        self.channels.entry(Some(level.to_log_level().unwrap() as i32)).or_insert(Vec::new()).push(channeled);
         self
     }
 
     pub fn build(&mut self) -> LogExecute {
         LogExecute {
-            directive: mem::replace(&mut self.directive, vec!()),
-            outputs: mem::replace(&mut self.outputs, HashMap::new()),
+            channels: mem::replace(&mut self.channels, HashMap::new()),
         }
     }
 }
-
-//type LogExecutors = HashMap<&'static str, HashMap<&'static str, LogExecute>>;
-//type LogModuleExecutors = HashMap<&'static str, LogExecute>;
-//type LogTargetExecutors = HashMap<&'static str, LogExecute>;
 
 #[allow(dead_code)]
 struct Logger {
@@ -329,35 +304,43 @@ fn format_parse() {
 
     let file = output::file::File::new("./a/a").expect("can't open file");
 
-    let o1 = Arc::new(OutputLock::new(io::stdout()));
+    let o1 = Arc::new(OutputLock::new(io::stdout(), true));
 
-    let o2 = Arc::new(output::OutputLock::new(file));
+    let o2 = Arc::new(OutputLock::new(file, false));
 
     let formatter1 = Arc::new(format::StringFormatter::new(DEFAULT_FORMAT_STRING));
-//    let formatter2 = Arc::new(format::StringFormatter::new("%{message}"));
+    //    let formatter2 = Arc::new(format::StringFormatter::new("%{message}"));
 
     let mut event_router_builder = single_channel::EventRouterBuilder::new(formatter1);
     event_router_builder.add(o1);
-    event_router_builder.add(o2);
+    //    event_router_builder.add(o2);
 
     let mut event_router_filter_builder = single_channel::EventRouterFilterBuilder::new();
-    event_router_filter_builder.add(LogLevelFilter::Info, &mut event_router_builder);
+//    event_router_filter_builder.add(LogLevelFilter::Debug, &mut event_router_builder);
+    event_router_filter_builder.default(&mut event_router_builder);
+
 
     let channel = Arc::new(single_channel::FileChannel::new(&mut event_router_filter_builder));
 
     let mut execute = LogExecuteBuilder::new();
 
     execute
-        .add_log_directive(None, LogLevelFilter::Info)
-        .default_output(channel.clone());
+        .add_channels(LogLevelFilter::Info, channel.clone())
 
     LoggerBuilder::new()
         .module(module_path!(), &mut execute)
-        .set_max_logger(LogLevelFilter::Info)
+        .set_max_logger(LogLevelFilter::Trace)
         .init_logger();
 
     let now = SystemTime::now();
     info!("{}", "test o 1111111111 22222222222 3333333333");
+    debug!("{}", "test o 1111111111 22222222222 3333333333");
+    error!("{}", "test o 1111111111 22222222222 3333333333");
+    warn!("{}", "test o 1111111111 22222222222 3333333333");
+    trace!("{}", "test o 1111111111 22222222222 3333333333");
+    info!("{}", "test o 1111111111 22222222222 3333333333");
+
+
     match now.elapsed() {
         Ok(elapsed) => {
             // it prints '2'
@@ -400,3 +383,4 @@ fn format_parse() {
     ////    }
     //    thread::sleep_ms(30000);
 }
+
